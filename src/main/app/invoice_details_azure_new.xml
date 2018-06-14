@@ -1,0 +1,192 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<mule xmlns:tls="http://www.mulesoft.org/schema/mule/tls" xmlns:mulexml="http://www.mulesoft.org/schema/mule/xml"
+	xmlns:sfdc="http://www.mulesoft.org/schema/mule/sfdc" xmlns:json="http://www.mulesoft.org/schema/mule/json"
+	xmlns:dw="http://www.mulesoft.org/schema/mule/ee/dw" xmlns:metadata="http://www.mulesoft.org/schema/mule/metadata"
+	xmlns:http="http://www.mulesoft.org/schema/mule/http"
+	xmlns:microsoftservicebus="http://www.mulesoft.org/schema/mule/microsoftservicebus"
+	xmlns:context="http://www.springframework.org/schema/context"
+	xmlns:tracking="http://www.mulesoft.org/schema/mule/ee/tracking" xmlns="http://www.mulesoft.org/schema/mule/core"
+	xmlns:doc="http://www.mulesoft.org/schema/mule/documentation"
+	xmlns:spring="http://www.springframework.org/schema/beans" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+	xsi:schemaLocation="http://www.springframework.org/schema/beans http://www.springframework.org/schema/beans/spring-beans-current.xsd
+http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+http://www.mulesoft.org/schema/mule/microsoftservicebus http://www.mulesoft.org/schema/mule/microsoftservicebus/current/mule-microsoftservicebus.xsd
+http://www.mulesoft.org/schema/mule/ee/dw http://www.mulesoft.org/schema/mule/ee/dw/current/dw.xsd
+http://www.mulesoft.org/schema/mule/http http://www.mulesoft.org/schema/mule/http/current/mule-http.xsd
+http://www.mulesoft.org/schema/mule/ee/tracking http://www.mulesoft.org/schema/mule/ee/tracking/current/mule-tracking-ee.xsd
+http://www.springframework.org/schema/context http://www.springframework.org/schema/context/spring-context-current.xsd
+http://www.mulesoft.org/schema/mule/json http://www.mulesoft.org/schema/mule/json/current/mule-json.xsd
+http://www.mulesoft.org/schema/mule/sfdc http://www.mulesoft.org/schema/mule/sfdc/current/mule-sfdc.xsd
+http://www.mulesoft.org/schema/mule/xml http://www.mulesoft.org/schema/mule/xml/current/mule-xml.xsd
+http://www.mulesoft.org/schema/mule/tls http://www.mulesoft.org/schema/mule/tls/current/mule-tls.xsd">
+	<sfdc:config name="Salesforce__Basic_Authentication"
+		username="hemanth.gadde@stericycle.com.sfdcdev1" password="Indiaindia_9"
+		url="https://test.salesforce.com/services/Soap/u/37.0" doc:name="Salesforce: Basic Authentication"
+		disableSessionInvalidation="true" />
+	<http:listener-config name="HTTP_Listener_Configuration"
+		host="0.0.0.0" port="8081" doc:name="HTTP Listener Configuration" />
+	<http:request-config name="HTTP_Azure" protocol="HTTPS"
+		host="srclroutingservicesdevsnd3std.servicebus.windows.net" port="443"
+		doc:name="HTTP Request Configuration" />
+	<spring:beans>
+		<spring:bean class="invoice_details_azure.AzureKeyGenerator"
+			name="azure-key-generator"></spring:bean>
+	</spring:beans>
+	<context:property-placeholder location="SW-SV-${env}.properties" />
+	<microsoftservicebus:azureConfig
+		name="Microsoft_Service_Bus__Azure_Service_Bus" namespace="srclroutingservicesdevsnd3std"
+		userName="RootManageSharedAccessKey" password="R9QQ2MC/mVv8j/fIs84Vup6PRudttuPQ5SeAsjctSJw="
+		doc:name="Microsoft Service Bus: Azure Service Bus" />
+    <http:request-config name="HTTP_Steriworks" protocol="HTTPS" host="${host}" port="${port}" connectionIdleTimeout="600000" doc:name="HTTP Request Configuration">
+        <tls:context>
+            <tls:trust-store insecure="true"/>
+        </tls:context>
+    </http:request-config>
+    <http:request-config name="Temp-steriworks" host="localhost" port="8081" doc:name="HTTP Request Configuration"/>
+	<flow name="invoice_details_azureFlow">
+		<microsoftservicebus:topic-receive
+			config-ref="Microsoft_Service_Bus__Azure_Service_Bus" sourceTopic="journalsync"
+			subscription="SteriVision" doc:name="Microsoft Service Bus (Streaming)" />
+		<set-payload value="#[new String(payload.getBody())]"
+			mimeType="application/xml" doc:name="Set Payload" />
+		<logger level="INFO" doc:name="Logger" />
+		<json:xml-to-json-transformer doc:name="XML to JSON" />
+		<json:json-to-object-transformer
+			returnClass="java.util.HashMap" doc:name="JSON to Object" />
+        <choice doc:name="Choice">
+            <when expression="#[payload.ArrayOfJournal.Journal.JournalTypeId==null]">
+                <set-payload value="#[payload.ArrayOfJournal.Journal]" doc:name="Set Payload"/>
+            </when>
+            <otherwise>
+                <expression-component doc:name="Expression"><![CDATA[java.util.ArrayList arr =  new java.util.ArrayList();
+arr.add(payload.ArrayOfJournal.Journal);
+payload = arr
+]]></expression-component>
+            </otherwise>
+        </choice>
+		<foreach collection="#[payload]"
+			doc:name="For Each">
+			<choice doc:name="Choice">
+				<when expression="#[payload.JournalTypeId == 1]">
+					<http:request config-ref="Temp-steriworks"
+						path="Journal/{JournalNumber}/Invoice" method="GET"
+						doc:name="HTTP - Invoice Details">
+						<http:request-builder>
+                            <http:uri-param paramName="JournalNumber" value="#[payload.JournalNumber]"/>
+                            <http:header headerName="Accept" value="application/json"/>
+                            <http:header headerName="X-SDS-User" value="${X-SDS-User}"/>
+                            <http:header headerName="X-SDS-Culture" value="${X-SDS-Culture}"/>
+                            <http:header headerName="X-SDS-LegalEntity" value="${X-SDS-LegalEntity}"/>
+                            <http:header headerName="Content-Type" value="application/json"/>
+						</http:request-builder>
+					</http:request>
+                    <json:json-to-object-transformer  doc:name="JSON to Object" returnClass="java.util.ArrayList"/>
+                    <foreach collection="#[payload]" doc:name="For Each - Customer">
+                        <set-variable variableName="invoiceMainResult" value="#[payload]" doc:name="Variable - invoiceMainResult"/>
+                        <sfdc:query config-ref="Salesforce__Basic_Authentication" query="dsql:SELECT RecordTypeId FROM Invoice__c where RecordType.name='invoice' Limit 1" doc:name="Salesforce"/>
+                        <flow-ref name="transform-salesforce-op-to-arraylist" doc:name="Flow Reference"/>
+                        <set-variable variableName="recordTypeVar" value="#[payload[0].RecordTypeId]" doc:name="Variable-recordTypeVar"/>
+
+                    </foreach>
+                    <flow-ref name="iterate-orders" doc:name="Flow Reference"/>
+
+				</when>
+				<otherwise>
+					<http:request config-ref="Temp-steriworks"
+						path="Journal/{JournalNumber}/Credit" method="GET"
+						doc:name="HTTP - Credit Details">
+						<http:request-builder>
+                            <http:uri-param paramName="JournalNumber" value="#[payload.JournalNumber]"/>
+                            <http:header headerName="Accept" value="application/json"/>
+                            <http:header headerName="X-SDS-User" value="${X-SDS-User}"/>
+                            <http:header headerName="X-SDS-Culture" value="${X-SDS-Culture}"/>
+                            <http:header headerName="X-SDS-LegalEntity" value="${X-SDS-LegalEntity}"/>
+                            <http:header headerName="Content-Type" value="application/json"/>
+
+						</http:request-builder>
+					</http:request>
+                    <json:json-to-object-transformer doc:name="JSON to Object"/>
+                    <foreach collection="#[payload]" doc:name="For Each">
+                        <set-variable variableName="invoiceMainResult" value="#[payload]" doc:name="Variable- invoiceMainResult"/>
+                        <sfdc:query config-ref="Salesforce__Basic_Authentication" query="dsql:SELECT RecordTypeId FROM Invoice__c where RecordType.name='Credit Memo'" doc:name="Salesforce"/>
+                        <flow-ref name="transform-salesforce-op-to-arraylist" doc:name="Flow Reference"/>
+
+                        <set-variable variableName="recordTypeVar" value="#[payload[0].RecordTypeId]" doc:name="Variable-recordTypeVar"/>
+
+                    </foreach>
+                    <flow-ref name="iterate-orders" doc:name="Flow Reference"/>
+				</otherwise>
+			</choice>
+		</foreach>
+        <mulexml:xml-to-object-transformer doc:name="XML to Object"/>
+        <logger level="INFO" doc:name="Logger"/>
+	</flow>
+    <sub-flow name="iterate-orders">
+    	                        <flow-ref name="get-customer-id" doc:name="Flow Reference-get-customer-id"/>
+                        <foreach collection="#[flowVars.invoiceMainResult.Orders]" doc:name="For Each  - Order">
+                            <set-variable variableName="invoiceVar" value="#[payload]" doc:name="Variable - invoiceVar"/>
+                            <dw:transform-message doc:name="Transform Message">
+                                <dw:set-payload><![CDATA[%dw 1.0
+%output application/java
+---
+
+[{
+	RecordTypeId: flowVars.recordTypeVar,
+	 Customer__c: flowVars.customerId,
+	  Due_Date__c: ((flowVars.invoiceMainResult.DueDate ++ '.000Z') as :datetime {format: "yyyy-MM-dd'T'HH:mm:ss.SSSX"}),
+	 Invoice_Date__c: ((flowVars.invoiceMainResult.Date ++ '.000Z') as :datetime {format: "yyyy-MM-dd'T'HH:mm:ss.SSSX"}) ,
+	 Name:flowVars.invoiceMainResult.Number,
+	 Work_Order__c: payload.WorkOrderId	
+}]]]></dw:set-payload>
+                            </dw:transform-message>
+                            <sfdc:create config-ref="Salesforce__Basic_Authentication" type="Invoice__c" doc:name="Salesforce">
+                                <sfdc:objects ref="#[payload]"/>
+                            </sfdc:create>
+                            <set-variable variableName="InvoiceId" value="#[payload[0].id]" doc:name="invoiceId"/>
+                            <sfdc:query config-ref="Salesforce__Basic_Authentication" query="dsql:Select Generator_Account__c from SVMXC__Service_Order__c where id='#[flowVars.invoiceVar.WorkOrderId]'" doc:name="Salesforce - Generator_Account"/>
+            <flow-ref name="transform-salesforce-op-to-arraylist" doc:name="Flow Reference"/>
+                            <set-variable variableName="generatorSiteVars" value="#[payload[0].Generator_Account__c]" doc:name="Variable - generatorSiteVars"/>
+                            <foreach collection="#[flowVars.invoiceVar.Lines]" doc:name="For Each - Invoice Line">
+                                <dw:transform-message doc:name="Transform Message">
+                                    <dw:set-payload><![CDATA[%dw 1.0
+%output application/java
+---
+[{
+	Invoice__c : flowVars.InvoiceId,
+	Generator_Site__c:flowVars.generatorSiteVars,
+	Name: flowVars.invoiceMainResult.Number,
+	//Work_Detail__c: payload.WorkOrderLineId,
+	Work_Detail__c:'a2b22000000ErNM',
+	Description_Override__c: payload.Description,
+	Invoice_Detail_Ext_Id__c:'12345',
+	Quantity__c : payload.Quantity,
+	Price_Override__c :payload.UnitPrice,
+	UOM_Override__c	: payload.UnitOfMeasure,
+	Taxes__c : ""
+	
+}]]]></dw:set-payload>
+                                </dw:transform-message>
+                                <sfdc:create config-ref="Salesforce__Basic_Authentication" type="Invoice_Detail__c" doc:name="Salesforce">
+                                    <sfdc:objects ref="#[payload]"/>
+                                </sfdc:create>
+                                <logger level="INFO" doc:name="Logger"/>
+                            </foreach>
+                        </foreach>
+    </sub-flow>
+	<sub-flow name="get-customer-id">
+        <logger message="querry --- SELECT Id FROM Account WHERE Dynamics_AX_Customer_Number__c = '#[flowVars.invoiceMainResult.CustomerNumber]'" level="INFO" doc:name="Logger"/>
+		<sfdc:query config-ref="Salesforce__Basic_Authentication"
+			query="dsql:SELECT Id FROM Account WHERE Dynamics_AX_Customer_Number__c = '#[flowVars.invoiceMainResult.CustomerNumber]'"
+			doc:name="Salesforce" />
+        <flow-ref name="transform-salesforce-op-to-arraylist" doc:name="Flow Reference"/>
+
+
+		<set-variable variableName="customerId" value="#[payload[0].Id]"
+			doc:name="customerId" />
+	</sub-flow>
+    <sub-flow name="transform-salesforce-op-to-arraylist">
+        <json:object-to-json-transformer doc:name="Object to Json"/>
+        <json:json-to-object-transformer returnClass="java.util.ArrayList" doc:name="JSON to Object"/>
+    </sub-flow>
+</mule>
